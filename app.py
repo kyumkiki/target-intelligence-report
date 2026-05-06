@@ -8,6 +8,10 @@ import json
 import GEOparse
 
 
+# =====================================================
+# PAGE SETUP
+# =====================================================
+
 st.set_page_config(
     page_title="Target Intelligence Report",
     layout="wide"
@@ -15,33 +19,93 @@ st.set_page_config(
 
 GDC_API = "https://api.gdc.cancer.gov"
 
+
 TCGA_PROJECTS = {
-    "Ovarian Cancer": "TCGA-OV",
+    "Adrenocortical Carcinoma": "TCGA-ACC",
+    "Bladder Cancer": "TCGA-BLCA",
     "Breast Cancer": "TCGA-BRCA",
-    "Pancreatic Cancer": "TCGA-PAAD",
+    "Cervical Cancer": "TCGA-CESC",
+    "Cholangiocarcinoma": "TCGA-CHOL",
+    "Colon Cancer": "TCGA-COAD",
+    "Diffuse Large B-cell Lymphoma": "TCGA-DLBC",
+    "Esophageal Cancer": "TCGA-ESCA",
+    "Glioblastoma": "TCGA-GBM",
+    "Head and Neck Cancer": "TCGA-HNSC",
+    "Kidney Chromophobe": "TCGA-KICH",
+    "Kidney Clear Cell Carcinoma": "TCGA-KIRC",
+    "Kidney Papillary Carcinoma": "TCGA-KIRP",
+    "Acute Myeloid Leukemia": "TCGA-LAML",
+    "Lower Grade Glioma": "TCGA-LGG",
+    "Liver Cancer": "TCGA-LIHC",
     "Lung Adenocarcinoma": "TCGA-LUAD",
     "Lung Squamous Cell Carcinoma": "TCGA-LUSC",
-    "Colorectal Cancer": "TCGA-COAD",
-    "Stomach Cancer": "TCGA-STAD",
-    "Liver Cancer": "TCGA-LIHC",
+    "Mesothelioma": "TCGA-MESO",
+    "Ovarian Cancer": "TCGA-OV",
+    "Pancreatic Cancer": "TCGA-PAAD",
+    "Pheochromocytoma / Paraganglioma": "TCGA-PCPG",
+    "Prostate Cancer": "TCGA-PRAD",
+    "Rectal Cancer": "TCGA-READ",
+    "Sarcoma": "TCGA-SARC",
     "Melanoma": "TCGA-SKCM",
+    "Stomach Cancer": "TCGA-STAD",
+    "Testicular Germ Cell Tumor": "TCGA-TGCT",
+    "Thyroid Cancer": "TCGA-THCA",
+    "Thymoma": "TCGA-THYM",
+    "Endometrial Cancer": "TCGA-UCEC",
+    "Uterine Carcinosarcoma": "TCGA-UCS",
+    "Uveal Melanoma": "TCGA-UVM",
 }
 
-IMMUNE_MARKERS = ["CD8A", "CD4", "FOXP3", "PDCD1", "CD274", "LAG3", "TIGIT"]
+
+IMMUNE_MARKERS = [
+    "CD8A",
+    "CD4",
+    "FOXP3",
+    "PDCD1",
+    "CD274",
+    "LAG3",
+    "TIGIT",
+    "GZMB",
+    "IFNG",
+]
 
 
 # =====================================================
-# GDC / TCGA DATA FUNCTIONS
+# GDC / TCGA FUNCTIONS
 # =====================================================
 
 def make_gdc_file_filter(project_id, sample_types):
     return {
         "op": "and",
         "content": [
-            {"op": "in", "content": {"field": "cases.project.project_id", "value": [project_id]}},
-            {"op": "in", "content": {"field": "files.data_type", "value": ["Gene Expression Quantification"]}},
-            {"op": "in", "content": {"field": "files.analysis.workflow_type", "value": ["STAR - Counts"]}},
-            {"op": "in", "content": {"field": "cases.samples.sample_type", "value": sample_types}},
+            {
+                "op": "in",
+                "content": {
+                    "field": "cases.project.project_id",
+                    "value": [project_id],
+                },
+            },
+            {
+                "op": "in",
+                "content": {
+                    "field": "files.data_type",
+                    "value": ["Gene Expression Quantification"],
+                },
+            },
+            {
+                "op": "in",
+                "content": {
+                    "field": "files.analysis.workflow_type",
+                    "value": ["STAR - Counts"],
+                },
+            },
+            {
+                "op": "in",
+                "content": {
+                    "field": "cases.samples.sample_type",
+                    "value": sample_types,
+                },
+            },
         ],
     }
 
@@ -80,7 +144,7 @@ def get_gdc_files(project_id, sample_types, max_files=10):
         rows.append({
             "file_id": h.get("file_id"),
             "file_name": h.get("file_name"),
-            "patient_id": case.get("submitter_id"),
+            "Patient": case.get("submitter_id"),
             "case_id": case.get("case_id"),
             "sample_type": sample.get("sample_type"),
         })
@@ -91,8 +155,10 @@ def get_gdc_files(project_id, sample_types, max_files=10):
 @st.cache_data(show_spinner=False)
 def download_gdc_file(file_id):
     r = requests.get(f"{GDC_API}/data/{file_id}", timeout=120)
+
     if r.status_code != 200:
         return None
+
     return r.text
 
 
@@ -105,26 +171,32 @@ def extract_gene_values(file_text, genes):
     except Exception:
         return {}
 
-    gene_col = "gene_name" if "gene_name" in df.columns else None
+    if "gene_name" not in df.columns:
+        return {}
 
     expr_col = None
+
     for col in ["tpm_unstranded", "fpkm_unstranded", "unstranded"]:
         if col in df.columns:
             expr_col = col
             break
 
-    if gene_col is None or expr_col is None:
+    if expr_col is None:
         return {}
 
     result = {}
 
     for gene in genes:
-        row = df[df[gene_col].astype(str).str.upper() == gene.upper()]
+        gene_upper = gene.upper()
+        row = df[df["gene_name"].astype(str).str.upper() == gene_upper]
+
         if not row.empty:
             try:
-                result[gene.upper()] = float(row.iloc[0][expr_col])
+                raw_value = float(row.iloc[0][expr_col])
+                log_value = np.log2(raw_value + 1)
+                result[gene_upper] = log_value
             except Exception:
-                result[gene.upper()] = np.nan
+                result[gene_upper] = np.nan
 
     return result
 
@@ -146,24 +218,26 @@ def get_tcga_expression(project_id, target_gene, tumor_n=10, normal_n=0):
     genes_to_extract = [target_gene] + IMMUNE_MARKERS
     rows = []
 
-    for _, row in all_files.iterrows():
-        text = download_gdc_file(row["file_id"])
-        gene_values = extract_gene_values(text, genes_to_extract)
+    for _, file_row in all_files.iterrows():
+        file_text = download_gdc_file(file_row["file_id"])
+        gene_values = extract_gene_values(file_text, genes_to_extract)
 
         target_value = gene_values.get(target_gene.upper())
 
-        if target_value is not None and not pd.isna(target_value):
-            data_row = {
-                "Patient": row["patient_id"],
-                "Group": "Tumor" if row["sample_type"] == "Primary Tumor" else "Normal",
-                "Sample_Type": row["sample_type"],
-                "Expression": target_value,
-            }
+        if target_value is None or pd.isna(target_value):
+            continue
 
-            for marker in IMMUNE_MARKERS:
-                data_row[marker] = gene_values.get(marker.upper(), np.nan)
+        row = {
+            "Patient": file_row["Patient"],
+            "Group": "Tumor" if file_row["sample_type"] == "Primary Tumor" else "Normal",
+            "Sample_Type": file_row["sample_type"],
+            "Target_Expression": target_value,
+        }
 
-            rows.append(data_row)
+        for marker in IMMUNE_MARKERS:
+            row[marker] = gene_values.get(marker.upper(), np.nan)
+
+        rows.append(row)
 
     return pd.DataFrame(rows)
 
@@ -179,7 +253,7 @@ def make_clinical_filter(project_id):
 
 
 @st.cache_data(show_spinner=False)
-def get_tcga_clinical(project_id, max_cases=500):
+def get_tcga_clinical(project_id, max_cases=1000):
     fields = [
         "submitter_id",
         "diagnoses.vital_status",
@@ -212,19 +286,19 @@ def get_tcga_clinical(project_id, max_cases=500):
         tumor_stage = diagnosis.get("tumor_stage")
 
         if days_to_death is not None:
-            time = days_to_death
+            os_time = days_to_death
         else:
-            time = days_to_last_follow_up
+            os_time = days_to_last_follow_up
 
-        if time is None:
+        if os_time is None:
             continue
 
-        event = 1 if str(vital_status).lower() == "dead" else 0
+        os_event = 1 if str(vital_status).lower() == "dead" else 0
 
         rows.append({
             "Patient": h.get("submitter_id"),
-            "OS_time": float(time),
-            "OS_event": event,
+            "OS_time": float(os_time),
+            "OS_event": os_event,
             "Vital_Status": vital_status,
             "Tumor_Stage": tumor_stage,
         })
@@ -236,55 +310,48 @@ def get_tcga_clinical(project_id, max_cases=500):
 # ANALYSIS FUNCTIONS
 # =====================================================
 
-def expression_summary(df):
-    tumor_df = df[df["Group"] == "Tumor"]
-    normal_df = df[df["Group"] == "Normal"]
+def expression_analysis(expr_df):
+    tumor_df = expr_df[expr_df["Group"] == "Tumor"]
+    normal_df = expr_df[expr_df["Group"] == "Normal"]
 
-    tumor_mean = tumor_df["Expression"].mean() if len(tumor_df) > 0 else np.nan
-    normal_mean = normal_df["Expression"].mean() if len(normal_df) > 0 else np.nan
+    tumor_mean = tumor_df["Target_Expression"].mean() if len(tumor_df) > 0 else np.nan
+    normal_mean = normal_df["Target_Expression"].mean() if len(normal_df) > 0 else np.nan
 
-    if pd.notna(normal_mean) and normal_mean != 0:
+    if pd.notna(normal_mean) and normal_mean > 0:
         fc = tumor_mean / normal_mean
     else:
         fc = np.nan
 
     if pd.isna(fc):
-        expression_score = 1
-    elif fc >= 3:
-        expression_score = 2
-    elif fc >= 1.5:
-        expression_score = 1
+        tumor_expression_score = 3 if tumor_mean >= 3 else 2 if tumor_mean >= 1 else 1
+        selectivity_score = 2
     else:
-        expression_score = 0
+        tumor_expression_score = 5 if tumor_mean >= 4 else 4 if tumor_mean >= 3 else 2 if tumor_mean >= 1 else 0
+        selectivity_score = 5 if fc >= 3 else 3 if fc >= 1.5 else 1 if fc >= 1.1 else 0
 
-    return normal_mean, tumor_mean, fc, expression_score
-
-
-def immune_correlation(df):
-    tumor_df = df[df["Group"] == "Tumor"].copy()
-    rows = []
-
-    for marker in IMMUNE_MARKERS:
-        if marker in tumor_df.columns:
-            temp = tumor_df[["Expression", marker]].dropna()
-            if len(temp) >= 3:
-                corr = temp["Expression"].corr(temp[marker])
-            else:
-                corr = np.nan
-            rows.append({"Immune_marker": marker, "Correlation_with_target": corr})
-
-    return pd.DataFrame(rows)
+    return tumor_mean, normal_mean, fc, tumor_expression_score, selectivity_score
 
 
-def make_survival_groups(expr_df, clinical_df):
-    merged = pd.merge(expr_df, clinical_df, on="Patient", how="inner")
-    merged = merged[merged["Group"] == "Tumor"].copy()
+def make_survival_groups(expr_df, clinical_df, cutoff_method):
+    tumor_df = expr_df[expr_df["Group"] == "Tumor"].copy()
+
+    merged = pd.merge(tumor_df, clinical_df, on="Patient", how="inner")
 
     if merged.empty:
         return pd.DataFrame()
 
-    median_expr = merged["Expression"].median()
-    merged["Target_Group"] = np.where(merged["Expression"] >= median_expr, "High", "Low")
+    if cutoff_method == "Median":
+        cutoff = merged["Target_Expression"].median()
+    elif cutoff_method == "Upper quartile":
+        cutoff = merged["Target_Expression"].quantile(0.75)
+    else:
+        cutoff = merged["Target_Expression"].median()
+
+    merged["Target_Group"] = np.where(
+        merged["Target_Expression"] >= cutoff,
+        "High",
+        "Low",
+    )
 
     return merged
 
@@ -296,18 +363,16 @@ def km_curve(df, group_name):
     if temp.empty:
         return pd.DataFrame()
 
+    survival = 1.0
     times = []
     survivals = []
 
-    survival = 1.0
-    event_times = sorted(temp["OS_time"].unique())
-
-    for t in event_times:
+    for t in sorted(temp["OS_time"].unique()):
         at_risk = len(temp[temp["OS_time"] >= t])
         events = len(temp[(temp["OS_time"] == t) & (temp["OS_event"] == 1)])
 
         if at_risk > 0:
-            survival *= (1 - events / at_risk)
+            survival = survival * (1 - events / at_risk)
 
         times.append(t)
         survivals.append(survival)
@@ -319,7 +384,7 @@ def km_curve(df, group_name):
     })
 
 
-def survival_score(survival_df):
+def survival_analysis_score(survival_df):
     if survival_df.empty:
         return 0, "Not available"
 
@@ -332,39 +397,136 @@ def survival_score(survival_df):
     high_event_rate = high["OS_event"].mean()
     low_event_rate = low["OS_event"].mean()
 
-    if high_event_rate > low_event_rate * 1.3:
-        return 2, "High target expression may be associated with poorer survival"
+    if low_event_rate == 0 and high_event_rate > 0:
+        score = 5
+        text = "High expression group shows higher death-event rate."
+    elif high_event_rate >= low_event_rate * 1.5:
+        score = 5
+        text = "High expression group shows markedly worse survival trend."
     elif high_event_rate > low_event_rate:
-        return 1, "High target expression shows a weak poor-survival trend"
+        score = 3
+        text = "High expression group shows weak poor-survival trend."
     else:
-        return 0, "No clear poor-survival trend"
+        score = 1
+        text = "No clear poor-survival trend."
+
+    return score, text
 
 
-def calculate_adc_score(expression_score, membrane, internalization, clinical_relevance, safety, competition_modifier):
-    raw_total = expression_score + membrane + internalization + clinical_relevance + safety + competition_modifier
-    total = max(0, min(10, raw_total))
+def immune_correlation(expr_df):
+    tumor_df = expr_df[expr_df["Group"] == "Tumor"].copy()
+    rows = []
 
-    if total >= 8:
-        level = "High ADC/ApDC suitability"
-    elif total >= 5:
-        level = "Moderate ADC/ApDC suitability"
+    for marker in IMMUNE_MARKERS:
+        if marker not in tumor_df.columns:
+            continue
+
+        temp = tumor_df[["Target_Expression", marker]].dropna()
+
+        if len(temp) < 3:
+            corr = np.nan
+        else:
+            corr = temp["Target_Expression"].corr(temp[marker])
+
+        rows.append({
+            "Immune_marker": marker,
+            "Correlation_with_target": corr,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def immune_score_from_correlation(immune_df):
+    if immune_df.empty:
+        return 0
+
+    valid = immune_df["Correlation_with_target"].dropna()
+
+    if valid.empty:
+        return 0
+
+    max_abs_corr = valid.abs().max()
+
+    if max_abs_corr >= 0.5:
+        return 3
+    elif max_abs_corr >= 0.3:
+        return 2
+    elif max_abs_corr >= 0.2:
+        return 1
     else:
-        level = "Low ADC/ApDC suitability"
-
-    return total, level
+        return 0
 
 
-def calculate_market_score(unmet, patient, competition_gap, biomarker, licensing):
-    total = unmet + patient + competition_gap + biomarker + licensing
-
-    if total >= 8:
-        level = "High marketability"
-    elif total >= 5:
-        level = "Moderate marketability"
+def grade_from_score(score):
+    if score >= 85:
+        return "A"
+    elif score >= 75:
+        return "B+"
+    elif score >= 65:
+        return "B"
+    elif score >= 55:
+        return "C+"
+    elif score >= 45:
+        return "C"
     else:
-        level = "Low marketability"
+        return "D"
 
-    return total, level
+
+def recommendation_from_grade(grade):
+    if grade in ["A", "B+"]:
+        return "Proceed to target validation and modality-specific experimental validation."
+    elif grade in ["B", "C+"]:
+        return "Proceed selectively. Prioritize safety, internalization, and validation datasets."
+    elif grade == "C":
+        return "Hold or validate only if strategic rationale is strong."
+    else:
+        return "Not recommended without stronger biological and business evidence."
+
+
+def calculate_master_score(
+    tumor_expression_score,
+    selectivity_score,
+    survival_score,
+    immune_score,
+    recurrence_score,
+    metastasis_score,
+    localization_score,
+    internalization_score,
+    payload_score,
+    biomarker_score,
+    safety_score,
+    dependency_score,
+    competition_score,
+    market_score,
+):
+    biology_score = (
+        tumor_expression_score
+        + selectivity_score
+        + survival_score
+        + immune_score
+        + recurrence_score
+        + metastasis_score
+        + dependency_score
+    )
+
+    modality_score = (
+        localization_score
+        + internalization_score
+        + payload_score
+        + biomarker_score
+    )
+
+    final_score = (
+        biology_score
+        + modality_score
+        + safety_score
+        + competition_score
+        + market_score
+    )
+
+    final_score = max(0, min(100, final_score))
+
+    return biology_score, modality_score, final_score
 
 
 @st.cache_data(show_spinner=False)
@@ -391,17 +553,21 @@ def make_report(
     tumor_mean,
     normal_mean,
     fc,
-    survival_text,
-    adc_score,
-    adc_level,
+    biology_score,
+    modality_score,
+    safety_score,
+    competition_score,
     market_score,
-    market_level,
+    final_score,
+    grade,
+    recommendation,
+    survival_text,
 ):
     normal_text = "Not available" if pd.isna(normal_mean) else f"{normal_mean:.3f}"
     fc_text = "Not available" if pd.isna(fc) else f"{fc:.3f}"
 
     return f"""
-Target Intelligence Report
+Target Intelligence Report v0.5
 
 Target: {target}
 Cancer: {cancer}
@@ -409,65 +575,54 @@ TCGA Project: {project_id}
 
 1. Expression
 - Data source: TCGA/GDC RNA-seq STAR Counts
+- Expression scale: log2(TPM + 1), or fallback to available GDC expression column
 - Tumor mean expression: {tumor_mean:.3f}
 - Normal mean expression: {normal_text}
-- Tumor/Normal fold-change: {fc_text}
+- Tumor/Normal ratio: {fc_text}
 
-Meaning:
-Expression is the first evidence layer.
-A good ADC/ApDC target should show sufficient tumor expression and, ideally, tumor-selective expression compared with normal tissue.
+Interpretation:
+Expression is the first evidence layer. For ADC/ApDC development, tumor expression and tumor selectivity are both important.
 
 2. Survival
 - Result: {survival_text}
 
-Meaning:
-Survival association is used as a disease relevance indicator.
-If high target expression is associated with poor survival, the target may be biologically linked to aggressive disease.
+Interpretation:
+Survival association is used as a disease relevance indicator. A target linked to poor prognosis may support stronger biological rationale.
 
-3. Recurrence
-- GEO recurrence module is not fully automated yet.
-- GEO metadata can be checked in the GEO tab.
+3. Immune
+- Immune marker correlation is calculated from the same TCGA tumor RNA-seq samples.
 
-Meaning:
-Recurrence association supports clinical relevance and patient stratification potential.
+Interpretation:
+Immune association helps understand whether the target is linked to tumor microenvironment biology.
 
-4. Metastasis
-- GEO metastasis module is not fully automated yet.
-- Primary/metastasis labels should be curated from GEO metadata.
+4. GEO Validation
+- GEO metadata can be reviewed for recurrence, metastasis, drug resistance, or treatment response datasets.
 
-Meaning:
-Metastasis association supports target relevance for advanced or recurrent cancer.
+Interpretation:
+GEO is best used as focused validation, while TCGA is used as broad baseline biology.
 
-5. Immune
-- Immune marker correlation is calculated using target expression and immune-related marker genes.
+5. ADC/ApDC Suitability
+- Biology score: {biology_score}/30
+- Modality score: {modality_score}/20
+- Safety score: {safety_score}/20
 
-Meaning:
-Immune association helps understand whether the target is linked to the tumor microenvironment.
+Interpretation:
+A good ADC/ApDC target should have tumor expression, surface localization, internalization potential, disease relevance, and acceptable normal tissue safety.
 
-6. ADC/ApDC Suitability
-- Score: {adc_score}/10
-- Interpretation: {adc_level}
+6. Competition and Marketability
+- Competition score: {competition_score}/10
+- Marketability score: {market_score}/20
 
-Meaning:
-This score reflects tumor expression, membrane localization, internalization evidence, clinical relevance, safety, and competition.
+Interpretation:
+A biologically strong target may still be commercially weak if competition is excessive or market opportunity is small.
 
-7. Competitors
-- Competitor landscape is currently expert-curated.
-- Future versions may connect PubMed, ClinicalTrials.gov, and company pipeline data.
+7. Final Target Intelligence Grade
+- Final score: {final_score}/100
+- Grade: {grade}
+- Recommendation: {recommendation}
 
-Meaning:
-A target with high biological value but excessive competition may have lower business attractiveness.
-
-8. Marketability
-- Score: {market_score}/10
-- Interpretation: {market_level}
-
-Meaning:
-Marketability reflects unmet need, patient population, competition gap, biomarker strategy, and licensing potential.
-
-Overall Interpretation:
-This report combines public cancer data with expert-defined decision criteria.
-The key value is not only data visualization, but the conversion of biological and business evidence into a structured Target Intelligence Score.
+Overall Meaning:
+This report converts public cancer data and expert-defined development criteria into a structured target intelligence score.
 """
 
 
@@ -475,122 +630,239 @@ The key value is not only data visualization, but the conversion of biological a
 # UI
 # =====================================================
 
-st.title("Target Intelligence Report")
-st.write("TCGA/GEO 기반 타겟-암종 분석 및 전문가 기준 점수화 리포트")
+st.title("Target Intelligence Report v0.5")
+st.write("어떤 target gene이라도 입력하여 TCGA 기반 타겟 리포트를 생성하는 고급형 MVP")
 
-st.sidebar.header("Input")
+st.sidebar.header("1. Target Input")
 
-target = st.sidebar.text_input("Target gene", "ALCAM")
+target = st.sidebar.text_input("Target gene symbol", "ALCAM")
 cancer = st.sidebar.selectbox("Cancer type", list(TCGA_PROJECTS.keys()))
 project_id = TCGA_PROJECTS[cancer]
 
 st.sidebar.write(f"TCGA Project: `{project_id}`")
 
-tumor_n = st.sidebar.slider("Tumor sample number", 1, 30, 10)
-normal_n = st.sidebar.slider("Normal sample number", 0, 20, 0)
+tumor_n = st.sidebar.slider("Tumor sample number", 3, 50, 10)
+normal_n = st.sidebar.slider("TCGA normal sample number", 0, 30, 0)
+
+cutoff_method = st.sidebar.selectbox(
+    "Survival cutoff method",
+    ["Median", "Upper quartile"],
+)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("GEO Validation")
+st.sidebar.header("2. GEO Validation")
+
 gse_id = st.sidebar.text_input("GEO GSE ID", "GSE26712")
 
+recurrence_score = st.sidebar.slider(
+    "Recurrence evidence score",
+    0,
+    3,
+    1,
+)
+
+metastasis_score = st.sidebar.slider(
+    "Metastasis evidence score",
+    0,
+    3,
+    1,
+)
+
 st.sidebar.markdown("---")
-st.sidebar.subheader("ADC/ApDC Expert Scoring")
+st.sidebar.header("3. Modality Suitability")
 
-membrane = st.sidebar.slider("Membrane localization", 0, 2, 2)
-internalization = st.sidebar.slider("Internalization evidence", 0, 2, 1)
-manual_clinical = st.sidebar.slider("Additional clinical relevance", 0, 2, 1)
-safety = st.sidebar.slider("Normal tissue safety", 0, 2, 1)
-competition_modifier = st.sidebar.slider("Competition modifier", -1, 1, 0)
+localization_score = st.sidebar.slider(
+    "Cell-surface / membrane localization",
+    0,
+    5,
+    4,
+)
+
+internalization_score = st.sidebar.slider(
+    "Internalization evidence",
+    0,
+    5,
+    3,
+)
+
+payload_score = st.sidebar.slider(
+    "Payload compatibility",
+    0,
+    5,
+    3,
+)
+
+biomarker_score = st.sidebar.slider(
+    "Patient stratification / biomarker feasibility",
+    0,
+    5,
+    3,
+)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Marketability Scoring")
+st.sidebar.header("4. Safety / Dependency")
 
-unmet = st.sidebar.slider("Unmet medical need", 0, 2, 2)
-patient = st.sidebar.slider("Patient population", 0, 2, 1)
-competition_gap = st.sidebar.slider("Competition gap", 0, 2, 1)
-biomarker = st.sidebar.slider("Biomarker strategy", 0, 2, 2)
-licensing = st.sidebar.slider("Licensing potential", 0, 2, 1)
+safety_score = st.sidebar.slider(
+    "Normal tissue safety score",
+    0,
+    20,
+    10,
+)
+
+dependency_score = st.sidebar.slider(
+    "Cancer dependency score",
+    0,
+    5,
+    1,
+)
+
+st.sidebar.markdown("---")
+st.sidebar.header("5. Competition / Market")
+
+competition_score = st.sidebar.slider(
+    "Competitive white-space score",
+    0,
+    10,
+    5,
+)
+
+market_score = st.sidebar.slider(
+    "Marketability score",
+    0,
+    20,
+    12,
+)
 
 
-if st.sidebar.button("Generate Full Report"):
+if st.sidebar.button("Generate Advanced Report"):
 
     with st.spinner("TCGA/GDC expression 데이터를 불러오는 중입니다."):
         expr_df = get_tcga_expression(project_id, target, tumor_n, normal_n)
 
     if expr_df.empty:
-        st.error("TCGA expression 데이터를 불러오지 못했습니다. Target gene, 암종, sample 수를 확인하세요.")
+        st.error(
+            "Target expression 데이터를 불러오지 못했습니다. Gene symbol, 암종, sample 수를 확인하세요."
+        )
         st.stop()
 
-    normal_mean, tumor_mean, fc, expression_score = expression_summary(expr_df)
+    tumor_mean, normal_mean, fc, tumor_expression_score, selectivity_score = expression_analysis(expr_df)
 
     with st.spinner("TCGA clinical survival 데이터를 불러오는 중입니다."):
         clinical_df = get_tcga_clinical(project_id)
 
-    survival_df = make_survival_groups(expr_df, clinical_df)
-    survival_relevance_score, survival_text = survival_score(survival_df)
-
-    clinical_relevance = max(manual_clinical, survival_relevance_score)
+    survival_df = make_survival_groups(expr_df, clinical_df, cutoff_method)
+    survival_score_value, survival_text = survival_analysis_score(survival_df)
 
     immune_df = immune_correlation(expr_df)
+    immune_score = immune_score_from_correlation(immune_df)
 
-    adc_score, adc_level = calculate_adc_score(
-        expression_score,
-        membrane,
-        internalization,
-        clinical_relevance,
-        safety,
-        competition_modifier,
+    biology_score, modality_score, final_score = calculate_master_score(
+        tumor_expression_score=tumor_expression_score,
+        selectivity_score=selectivity_score,
+        survival_score=survival_score_value,
+        immune_score=immune_score,
+        recurrence_score=recurrence_score,
+        metastasis_score=metastasis_score,
+        localization_score=localization_score,
+        internalization_score=internalization_score,
+        payload_score=payload_score,
+        biomarker_score=biomarker_score,
+        safety_score=safety_score,
+        dependency_score=dependency_score,
+        competition_score=competition_score,
+        market_score=market_score,
     )
 
-    market_score, market_level = calculate_market_score(
-        unmet,
-        patient,
-        competition_gap,
-        biomarker,
-        licensing,
-    )
+    grade = grade_from_score(final_score)
+    recommendation = recommendation_from_grade(grade)
 
     st.header(f"{target} in {cancer}")
     st.caption(f"Data source: TCGA/GDC project {project_id}")
 
     tabs = st.tabs([
+        "Executive Summary",
         "Expression",
         "Survival",
         "Immune",
         "GEO",
-        "ADC/ApDC Score",
-        "Marketability",
+        "Score Breakdown",
         "Scoring Criteria",
         "Report",
     ])
 
     with tabs[0]:
-        st.subheader("1. TCGA Expression")
+        st.subheader("Executive Summary")
 
         col1, col2, col3, col4 = st.columns(4)
 
+        col1.metric("Final Score", f"{final_score}/100")
+        col2.metric("Grade", grade)
+        col3.metric("Biology", f"{biology_score}/30")
+        col4.metric("Modality", f"{modality_score}/20")
+
+        st.success(recommendation)
+
+        summary_df = pd.DataFrame({
+            "Category": [
+                "Biology",
+                "Modality suitability",
+                "Safety",
+                "Competition",
+                "Marketability",
+            ],
+            "Score": [
+                biology_score,
+                modality_score,
+                safety_score,
+                competition_score,
+                market_score,
+            ],
+            "Max": [
+                30,
+                20,
+                20,
+                10,
+                20,
+            ],
+        })
+
+        st.dataframe(summary_df)
+
+        fig, ax = plt.subplots()
+        ax.bar(summary_df["Category"], summary_df["Score"])
+        ax.set_ylabel("Score")
+        ax.set_title("Target Intelligence Score Breakdown")
+        plt.xticks(rotation=30)
+        st.pyplot(fig)
+
+    with tabs[1]:
+        st.subheader("1. TCGA Expression")
+
+        col1, col2, col3, col4, col5 = st.columns(5)
+
         col1.metric("Tumor mean", f"{tumor_mean:.3f}")
         col2.metric("Normal mean", "NA" if pd.isna(normal_mean) else f"{normal_mean:.3f}")
-        col3.metric("Tumor/Normal FC", "NA" if pd.isna(fc) else f"{fc:.3f}")
-        col4.metric("Expression Score", f"{expression_score}/2")
+        col3.metric("Tumor/Normal ratio", "NA" if pd.isna(fc) else f"{fc:.3f}")
+        col4.metric("Tumor expression score", f"{tumor_expression_score}/5")
+        col5.metric("Selectivity score", f"{selectivity_score}/5")
 
         st.dataframe(expr_df)
 
         fig, ax = plt.subplots()
 
         if expr_df["Group"].nunique() > 1:
-            plot_df = expr_df.groupby("Group")["Expression"].mean().reset_index()
-            ax.bar(plot_df["Group"], plot_df["Expression"])
-            ax.set_ylabel("Mean Expression")
+            plot_df = expr_df.groupby("Group")["Target_Expression"].mean().reset_index()
+            ax.bar(plot_df["Group"], plot_df["Target_Expression"])
+            ax.set_ylabel("Mean log2 expression")
         else:
-            ax.bar(expr_df["Patient"], expr_df["Expression"])
-            ax.set_ylabel("Expression")
+            ax.bar(expr_df["Patient"], expr_df["Target_Expression"])
+            ax.set_ylabel("log2 expression")
             plt.xticks(rotation=90)
 
         ax.set_title(f"{target} expression in {project_id}")
         st.pyplot(fig)
 
-    with tabs[1]:
+    with tabs[2]:
         st.subheader("2. TCGA Survival")
 
         if survival_df.empty:
@@ -614,10 +886,10 @@ if st.sidebar.button("Generate Full Report"):
             ax.legend()
             st.pyplot(fig)
 
-            st.metric("Survival Relevance Score", f"{survival_relevance_score}/2")
+            st.metric("Survival score", f"{survival_score_value}/5")
             st.write(survival_text)
 
-    with tabs[2]:
+    with tabs[3]:
         st.subheader("3. Immune Association")
 
         if immune_df.empty:
@@ -632,171 +904,142 @@ if st.sidebar.button("Generate Full Report"):
             plt.xticks(rotation=45)
             st.pyplot(fig)
 
-    with tabs[3]:
+            st.metric("Immune score", f"{immune_score}/3")
+
+    with tabs[4]:
         st.subheader("4. GEO Metadata")
 
-        st.write("GEO는 데이터셋마다 annotation 구조가 달라 metadata 확인 후 recurrence/metastasis 그룹을 지정해야 합니다.")
+        st.write(
+            "GEO는 recurrence, metastasis, treatment response 등 특정 clinical question 검증용으로 사용합니다."
+        )
 
         if st.button("Load GEO Metadata"):
             try:
                 with st.spinner("GEO metadata를 불러오는 중입니다."):
                     geo_df = get_geo_info(gse_id)
+
                 st.success(f"{gse_id} loaded")
                 st.dataframe(geo_df)
+
             except Exception as e:
                 st.error(f"GEO 데이터를 불러오지 못했습니다: {e}")
 
-    with tabs[4]:
-        st.subheader("5. ADC/ApDC Suitability Score")
-
-        st.metric("ADC/ApDC Suitability Score", f"{adc_score}/10")
-        st.write(adc_level)
+    with tabs[5]:
+        st.subheader("5. Score Breakdown")
 
         score_df = pd.DataFrame({
-            "Component": [
-                "Tumor expression evidence",
-                "Membrane localization",
-                "Internalization evidence",
-                "Clinical relevance",
+            "Domain": [
+                "Tumor expression",
+                "Tumor selectivity",
+                "Survival relevance",
+                "Immune association",
+                "Recurrence evidence",
+                "Metastasis evidence",
+                "Cancer dependency",
+                "Cell surface localization",
+                "Internalization",
+                "Payload compatibility",
+                "Biomarker feasibility",
                 "Normal tissue safety",
-                "Competition modifier",
+                "Competitive white space",
+                "Marketability",
             ],
             "Score": [
-                expression_score,
-                membrane,
-                internalization,
-                clinical_relevance,
-                safety,
-                competition_modifier,
+                tumor_expression_score,
+                selectivity_score,
+                survival_score_value,
+                immune_score,
+                recurrence_score,
+                metastasis_score,
+                dependency_score,
+                localization_score,
+                internalization_score,
+                payload_score,
+                biomarker_score,
+                safety_score,
+                competition_score,
+                market_score,
             ],
-            "Meaning": [
-                "TCGA tumor expression and tumor/normal selectivity",
-                "Whether the target is located on the cell surface",
-                "Whether target binding can lead to receptor-mediated internalization",
-                "Survival, recurrence, metastasis, or disease relevance",
-                "Lower normal tissue risk gives a higher score",
-                "High competition can reduce attractiveness; white space can increase it",
+            "Max": [
+                5,
+                5,
+                5,
+                3,
+                3,
+                3,
+                5,
+                5,
+                5,
+                5,
+                5,
+                20,
+                10,
+                20,
             ],
         })
 
         st.dataframe(score_df)
 
-    with tabs[5]:
-        st.subheader("6. Marketability Score")
-
-        st.metric("Marketability Score", f"{market_score}/10")
-        st.write(market_level)
-
-        market_df = pd.DataFrame({
-            "Component": [
-                "Unmet medical need",
-                "Patient population",
-                "Competition gap",
-                "Biomarker strategy",
-                "Licensing potential",
-            ],
-            "Score": [
-                unmet,
-                patient,
-                competition_gap,
-                biomarker,
-                licensing,
-            ],
-            "Meaning": [
-                "Treatment limitations and medical need",
-                "Market size and target patient population",
-                "Differentiation space compared with existing drugs",
-                "Feasibility of target-positive patient selection",
-                "Potential attractiveness for pharma licensing",
-            ],
-        })
-
-        st.dataframe(market_df)
-
     with tabs[6]:
-        st.subheader("7. Scoring Criteria")
+        st.subheader("6. Scoring Criteria")
 
         st.markdown("""
-### Expression Score
+### Final Target Intelligence Score / 100
 
-| 기준 | 점수 | 의미 |
+| Category | Max score | Meaning |
 |---|---:|---|
-| Tumor/Normal FC ≥ 3 | 2 | 종양 선택성이 높음 |
-| Tumor/Normal FC 1.5–3 | 1 | 종양 증가 경향 |
-| Tumor/Normal FC < 1.5 | 0 | 종양 선택성 낮음 |
-| Normal sample 없음 | 1 | Tumor expression만 인정, 선택성 판단 보류 |
+| Biology | 30 | Expression, selectivity, survival, immune, recurrence, metastasis, dependency |
+| Modality suitability | 20 | Surface localization, internalization, payload compatibility, biomarker feasibility |
+| Safety | 20 | Normal tissue safety and on-target/off-tumor risk |
+| Competition | 10 | Competitive white space |
+| Marketability | 20 | Market size, unmet need, licensing potential |
 
-### Clinical Relevance Score
+### Grade
 
-| 기준 | 점수 | 의미 |
-|---|---:|---|
-| High expression group의 event rate가 뚜렷하게 높음 | 2 | 질병 악성도와 관련 가능성 높음 |
-| High expression group의 event rate가 약간 높음 | 1 | 약한 임상 관련성 |
-| 차이 없음 | 0 | 임상 관련성 불명확 |
+| Score | Grade | Recommendation |
+|---:|---|---|
+| 85–100 | A | Strongly proceed |
+| 75–84 | B+ | Proceed to validation |
+| 65–74 | B | Selective validation |
+| 55–64 | C+ | Validate only with strong rationale |
+| 45–54 | C | Hold or deprioritize |
+| <45 | D | Not recommended |
 
-### ADC/ApDC Suitability Score
+### Important interpretation
 
-| 항목 | 점수 |
-|---|---:|
-| Tumor expression evidence | 0–2 |
-| Membrane localization | 0–2 |
-| Internalization evidence | 0–2 |
-| Clinical relevance | 0–2 |
-| Normal tissue safety | 0–2 |
-| Competition modifier | -1–1 |
-
-판정 기준:
-
-| 총점 | 판정 |
-|---:|---|
-| 8–10 | High suitability |
-| 5–7 | Moderate suitability |
-| 0–4 | Low suitability |
-
-### Marketability Score
-
-| 항목 | 점수 |
-|---|---:|
-| Unmet medical need | 0–2 |
-| Patient population | 0–2 |
-| Competition gap | 0–2 |
-| Biomarker strategy | 0–2 |
-| Licensing potential | 0–2 |
-
-판정 기준:
-
-| 총점 | 판정 |
-|---:|---|
-| 8–10 | High marketability |
-| 5–7 | Moderate marketability |
-| 0–4 | Low marketability |
+This score is not a regulatory conclusion.  
+It is a structured expert-decision framework for target prioritization.
 """)
 
     with tabs[7]:
-        st.subheader("8. Generated Report")
+        st.subheader("7. Generated Report")
 
         report = make_report(
-            target,
-            cancer,
-            project_id,
-            tumor_mean,
-            normal_mean,
-            fc,
-            survival_text,
-            adc_score,
-            adc_level,
-            market_score,
-            market_level,
+            target=target,
+            cancer=cancer,
+            project_id=project_id,
+            tumor_mean=tumor_mean,
+            normal_mean=normal_mean,
+            fc=fc,
+            biology_score=biology_score,
+            modality_score=modality_score,
+            safety_score=safety_score,
+            competition_score=competition_score,
+            market_score=market_score,
+            final_score=final_score,
+            grade=grade,
+            recommendation=recommendation,
+            survival_text=survival_text,
         )
 
-        st.text_area("Report", report, height=700)
+        st.text_area("Report", report, height=750)
 
         st.download_button(
             label="Download Report",
             data=report,
-            file_name=f"{target}_{project_id}_Target_Intelligence_Report.txt",
+            file_name=f"{target}_{project_id}_Target_Intelligence_Report_v05.txt",
             mime="text/plain",
         )
 
 else:
-    st.info("왼쪽에서 Target gene과 Cancer type을 선택한 뒤 Generate Full Report를 누르세요.")
+    st.info("왼쪽에서 target gene과 암종을 선택한 뒤 Generate Advanced Report를 누르세요.")
