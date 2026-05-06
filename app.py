@@ -1,4 +1,6 @@
 import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
 
 st.set_page_config(
     page_title="Target Intelligence Report",
@@ -22,8 +24,24 @@ cancer = st.sidebar.selectbox(
 if st.sidebar.button("Generate Report"):
     st.header(f"{target} in {cancer}")
 
-    st.subheader("1. Expression")
-    st.write("Tumor vs normal expression analysis will be shown here.")
+st.subheader("1. Expression")
+
+df = pd.read_csv("expression_data.csv")
+
+st.dataframe(df)
+
+fig, ax = plt.subplots()
+
+ax.plot(df["Sample"], df["Expression"])
+
+ax.set_xlabel("Sample")
+ax.set_ylabel("Expression")
+
+st.pyplot(fig)
+
+mean_expression = df["Expression"].mean()
+
+st.write(f"Average expression: {mean_expression:.2f}")
 
     st.subheader("2. Survival")
     st.write("Overall survival and disease-free survival analysis will be shown here.")
